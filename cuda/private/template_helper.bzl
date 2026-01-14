@@ -1,6 +1,11 @@
 load("//cuda/private:redist_json_helper.bzl", "redist_json_helper")
 load("//cuda/private:templates/registry.bzl", "REGISTRY")
 
+def _first(list):
+    if len(list) == 0:
+        return None
+    return list[0]
+
 def _to_forward_slash(s):
     return s.replace("\\", "/")
 
@@ -51,7 +56,7 @@ def _expand_dctk_component(repository_ctx, component):
     }
     return _expand_template(repository_ctx, tpl_label, substitutions = substitutions)
 
-def _generate_build_impl(repository_ctx, libpath, components, is_cuda_repo, is_deliverable):
+def _generate_build_impl(repository_ctx, libpath, components, is_cuda_repo, is_deliverable, archs = ["x86_64"]):
     # stitch template fragment
     fragments = [
         Label("//cuda/private:templates/BUILD.cuda_shared"),
@@ -81,9 +86,23 @@ def _generate_build_impl(repository_ctx, libpath, components, is_cuda_repo, is_d
 
     if is_cuda_repo and is_deliverable:  # generate `@cuda//BUILD` for CTK with deliverables
         for comp in components:
+            template_content.append("# Targets for: {}".format(comp))
             for target in REGISTRY[comp]:
-                repo = components[comp]
-                line = 'alias(name = "{target}", actual = "{repo}//:{target}")'.format(target = target, repo = repo)
+                repolist = components[comp]
+                if not archs:
+                    if len(repolist) != 1:
+                        fail("No archs specified, expect strictly 1 repo entry for component {} but got: {}".format(comp, repolist))
+                    repo = repolist[0]
+                    line = 'alias(name = "{target}", actual = "{repo}//:{target}")'.format(target = target, repo = repo)
+                else:
+                    select_lines = "select({\n"
+                    for arch in archs:
+                        repo = _first([r for r in repolist if arch in r])
+                        if repo == None:
+                            fail("No repo found for component {} and arch {}".format(comp, arch))
+                        select_lines += '"@platforms//cpu:{arch}": "{repo}//:{target}",\n'.format(arch = arch, target = target, repo = repo)
+                    select_lines += "}),\n"
+                    line = 'alias(name = "{target}", actual = {select_lines})'.format(select_lines = select_lines, target = target, repo = repo)
                 template_content.append(line)
 
             # add an empty line to separate aliased targets from different components
@@ -100,7 +119,7 @@ def _generate_build_impl(repository_ctx, libpath, components, is_cuda_repo, is_d
     }
     repository_ctx.template("BUILD", template_path, substitutions = substitutions, executable = False)
 
-def _generate_build(repository_ctx, libpath, components = None, is_cuda_repo = True, is_deliverable = False):
+def _generate_build(repository_ctx, libpath, components = None, is_cuda_repo = True, is_deliverable = False, archs = ["x86_64"]):
     """Generate `@cuda//BUILD` or `@cuda_<component>//BUILD`
 
     Notes:
@@ -125,11 +144,11 @@ def _generate_build(repository_ctx, libpath, components = None, is_cuda_repo = T
                 if c not in REGISTRY:
                     fail("{} is not a valid component")
 
-    _generate_build_impl(repository_ctx, libpath, components, is_cuda_repo, is_deliverable)
+    _generate_build_impl(repository_ctx, libpath, components, is_cuda_repo, is_deliverable, archs)
 
-def _generate_defs_bzl(repository_ctx, version_major, version_minor, is_local_ctk):
+def _generate_defs_bzl(repository_ctx, version_major, version_minor, is_local_ctk, archs = ["x86_64"]):
     tpl_label = Label("//cuda/private:templates/defs.bzl.tpl")
-    substitutions = {
+    substitutions = {        
         "%{version_major}": str(version_major),
         "%{version_minor}": str(version_minor),
         "%{is_local_ctk}": str(is_local_ctk),
@@ -182,112 +201,135 @@ def _generate_redist_bzl(repository_ctx, component_specs, redist_version):
     }
     repository_ctx.template("redist.bzl", tpl_label, substitutions = substitutions, executable = False)
 
-def _generate_toolchain_build(repository_ctx, cuda):
+def _generate_toolchain_build(repository_ctx, cudas, archs = ["x86_64"]):
     tpl_label = Label(
         "//cuda/private:templates/BUILD.toolchain_" +
         ("nvcc" if _is_linux(repository_ctx) else "nvcc_msvc"),
     )
-    compiler_files = ["@cuda//:compiler_deps"]
-    if int(cuda.version_major) >= 13:
-        if cuda.cicc_label != None:
-            compiler_files.append(cuda.cicc_label)
-        if cuda.libdevice_label != None:
-            compiler_files.append(cuda.libdevice_label)
-    compiler_files_line = "compiler_files = " + repr(compiler_files) + ","
 
-    substitutions = {
-        "# %{compiler_files_line}": compiler_files_line,
-        "%{cuda_path}": _to_forward_slash(cuda.path) if cuda.path else "cuda-not-found",
-        "%{cuda_version}": "{}.{}".format(cuda.version_major, cuda.version_minor),
-        "%{nvcc_version_major}": str(cuda.nvcc_version_major),
-        "%{nvcc_version_minor}": str(cuda.nvcc_version_minor),
-        "%{nvcc_label}": cuda.nvcc_label,
-        "%{nvlink_label}": cuda.nvlink_label,
-        "%{link_stub_label}": cuda.link_stub_label,
-        "%{bin2c_label}": cuda.bin2c_label,
-        "%{fatbinary_label}": cuda.fatbinary_label,
-    }
-    if cuda.cicc_label:
-        substitutions["# %{cicc_line}"] = "cicc = " + repr(cuda.cicc_label)
-    if cuda.libdevice_label:
-        substitutions["# %{libdevice_line}"] = "libdevice = " + repr(cuda.libdevice_label)
+    content = ""
 
-    env_tmp = repository_ctx.os.environ.get("TMP", repository_ctx.os.environ.get("TEMP", None))
-    if env_tmp != None:
-        substitutions["%{env_tmp}"] = _to_forward_slash(env_tmp)
-    repository_ctx.template("toolchain/BUILD", tpl_label, substitutions = substitutions, executable = False)
+    for arch in archs:
+        cuda = _first([c for c in cudas if c.arch == arch])
+        if cuda == None:
+            fail("No cuda toolkit found for arch: {}".format(arch))
 
-def _generate_toolchain_clang_build(repository_ctx, cuda, clang_path_or_label):
+        content += "# Toolchain for arch: {}\n".format(arch)
+
+        compiler_files = ["@cuda//:compiler_deps"]
+        if int(cuda.version_major) >= 13:
+            if cuda.cicc_label != None:
+                compiler_files.append(cuda.cicc_label)
+            if cuda.libdevice_label != None:
+                compiler_files.append(cuda.libdevice_label)
+        compiler_files_line = "compiler_files = " + repr(compiler_files) + ","
+
+        substitutions = {
+            "# %{compiler_files_line}": compiler_files_line,
+            "%{cuda_path}": _to_forward_slash(cuda.path) if cuda.path else "cuda-not-found",
+            "%{cuda_version}": "{}.{}".format(cuda.version_major, cuda.version_minor),
+            "%{nvcc_version_major}": str(cuda.nvcc_version_major),
+            "%{nvcc_version_minor}": str(cuda.nvcc_version_minor),
+            "%{nvcc_label}": cuda.nvcc_label,
+            "%{nvlink_label}": cuda.nvlink_label,
+            "%{link_stub_label}": cuda.link_stub_label,
+            "%{bin2c_label}": cuda.bin2c_label,
+            "%{fatbinary_label}": cuda.fatbinary_label,
+            "%{arch}": cuda.arch,
+        }
+        if cuda.cicc_label:
+            substitutions["# %{cicc_line}"] = "cicc = " + repr(cuda.cicc_label)
+        if cuda.libdevice_label:
+            substitutions["# %{libdevice_line}"] = "libdevice = " + repr(cuda.libdevice_label)
+
+        env_tmp = repository_ctx.os.environ.get("TMP", repository_ctx.os.environ.get("TEMP", None))
+        if env_tmp != None:
+            substitutions["%{env_tmp}"] = _to_forward_slash(env_tmp)
+
+        content += _expand_template(repository_ctx, tpl_label, substitutions = substitutions)
+        content += "\n"
+
+    repository_ctx.file("toolchain/BUILD", content, executable = False)
+
+def _generate_toolchain_clang_build(repository_ctx, cudas, clang_path_or_label, archs = ["x86_64"]):
     tpl_label = Label("//cuda/private:templates/BUILD.toolchain_clang")
     compiler_attr_line = ""
     clang_path_for_subst = ""
     clang_label_for_subst = ""
 
-    compiler_use_cc_toolchain_env = repository_ctx.os.environ.get("CUDA_COMPILER_USE_CC_TOOLCHAIN", "false")
-    if compiler_use_cc_toolchain_env == "true":
-        compiler_attr_line = "compiler_use_cc_toolchain = True,"
-    elif clang_path_or_label != None and (clang_path_or_label.startswith("//") or clang_path_or_label.startswith("@")):
-        # Use compiler_label
-        compiler_attr_line = 'compiler_label = "%{{clang_label}}",'
-        clang_label_for_subst = clang_path_or_label
-    else:
-        # Use compiler_executable
-        compiler_attr_line = 'compiler_executable = "%{{clang_path}}",'
-        clang_path_for_subst = _to_forward_slash(clang_path_or_label) if clang_path_or_label else "cuda-clang-path-not-found"
+    content = ""
 
-    compiler_attr_line = compiler_attr_line.format(
-        clang_label = "%{clang_label}",
-        clang_path = "%{clang_path}",
-    )
+    for arch in archs:
+        cuda = _first([c for c in cudas if c.arch == arch])
+        if not cuda:
+            fail("No cuda toolkit found for arch: {}".format(arch))
 
-    compiler_files = []
-    cuda_path_for_subst = ""
-    path_data = None
-    if cuda.path:
-        compiler_files.append("@cuda//:compiler_deps")
-        cuda_path_for_subst = _to_forward_slash(cuda.path)
-    else:
-        cuda_path_for_subst = "$(location @cuda//:compiler_root)"
-        path_data = ["@cuda//:compiler_root"]
-        compiler_files.extend([
-            "@cuda//:nvcc_all_files",
-            "@cuda//:cccl_all_files",
-            "@cuda//:cudart_all_files",
-            "@cuda//:curand_all_files",
-        ])
-    path_data_line = "path_data = " + repr(path_data) + ","
-    compiler_files_line = "compiler_files = " + repr(compiler_files) + ","
+        content += "# Toolchain for arch: {}\n".format(arch)
 
-    substitutions = {
-        "# %{compiler_attribute_line}": compiler_attr_line,
-        "# %{compiler_files_line}": compiler_files_line,
-        "%{clang_path}": clang_path_for_subst,  # Will be empty if label is used
-        "%{clang_label}": clang_label_for_subst,  # Will be empty if path is used
-        "%{cuda_path}": cuda_path_for_subst,
-        "# %{path_data_line}": path_data_line,
-        "%{cuda_version}": "{}.{}".format(cuda.version_major, cuda.version_minor),
-        "%{nvcc_label}": cuda.nvcc_label,
-        "%{nvlink_label}": cuda.nvlink_label,
-        "%{link_stub_label}": cuda.link_stub_label,
-        "%{bin2c_label}": cuda.bin2c_label,
-        "%{fatbinary_label}": cuda.fatbinary_label,
-    }
-    if cuda.cicc_label:
-        substitutions["# %{cicc_line}"] = "cicc = " + repr(cuda.cicc_label)
-    if cuda.libdevice_label:
-        substitutions["# %{libdevice_line}"] = "libdevice = " + repr(cuda.libdevice_label)
+        compiler_use_cc_toolchain_env = repository_ctx.os.environ.get("CUDA_COMPILER_USE_CC_TOOLCHAIN", "false")
+        if compiler_use_cc_toolchain_env == "true":
+            compiler_attr_line = "compiler_use_cc_toolchain = True,"
+        elif clang_path_or_label != None and (clang_path_or_label.startswith("//") or clang_path_or_label.startswith("@")):
+            # Use compiler_label
+            compiler_attr_line = 'compiler_label = "%{{clang_label}}",'
+            clang_label_for_subst = clang_path_or_label
+        else:
+            # Use compiler_executable
+            compiler_attr_line = 'compiler_executable = "%{{clang_path}}",'
+            clang_path_for_subst = _to_forward_slash(clang_path_or_label) if clang_path_or_label else "cuda-clang-path-not-found"
 
-    if clang_label_for_subst:
-        substitutions.pop("%{clang_path}")
-    if clang_path_for_subst:
-        substitutions.pop("%{clang_label}")
+        compiler_attr_line = compiler_attr_line.format(
+            clang_label = "%{clang_label}",
+            clang_path = "%{clang_path}",
+        )
 
-    repository_ctx.template(
-        "toolchain/clang/BUILD",
-        tpl_label,
-        substitutions = substitutions,
-        executable = False,
-    )
+        compiler_files = []
+        cuda_path_for_subst = ""
+        path_data = None
+        if cuda.path:
+            compiler_files.append("@cuda//:compiler_deps")
+            cuda_path_for_subst = _to_forward_slash(cuda.path)
+        else:
+            cuda_path_for_subst = "$(location @cuda//:compiler_root)"
+            path_data = ["@cuda//:compiler_root"]
+            compiler_files.extend([
+                "@cuda//:nvcc_all_files",
+                "@cuda//:cccl_all_files",
+                "@cuda//:cudart_all_files",
+                "@cuda//:curand_all_files",
+            ])
+        path_data_line = "path_data = " + repr(path_data) + ","
+        compiler_files_line = "compiler_files = " + repr(compiler_files) + ","
+
+        substitutions = {
+            "# %{compiler_attribute_line}": compiler_attr_line,
+            "# %{compiler_files_line}": compiler_files_line,
+            "%{clang_path}": clang_path_for_subst,  # Will be empty if label is used
+            "%{clang_label}": clang_label_for_subst,  # Will be empty if path is used
+            "%{cuda_path}": cuda_path_for_subst,
+            "# %{path_data_line}": path_data_line,
+            "%{cuda_version}": "{}.{}".format(cuda.version_major, cuda.version_minor),
+            "%{nvcc_label}": cuda.nvcc_label,
+            "%{nvlink_label}": cuda.nvlink_label,
+            "%{link_stub_label}": cuda.link_stub_label,
+            "%{bin2c_label}": cuda.bin2c_label,
+            "%{fatbinary_label}": cuda.fatbinary_label,
+            "%{arch}": arch,
+        }
+        if cuda.cicc_label:
+            substitutions["# %{cicc_line}"] = "cicc = " + repr(cuda.cicc_label)
+        if cuda.libdevice_label:
+            substitutions["# %{libdevice_line}"] = "libdevice = " + repr(cuda.libdevice_label)
+
+        if clang_label_for_subst:
+            substitutions.pop("%{clang_path}")
+        if clang_path_for_subst:
+            substitutions.pop("%{clang_label}")
+
+        content += _expand_template(repository_ctx, tpl_label, substitutions = substitutions)
+        content += "\n"
+
+    repository_ctx.file("toolchain/clang/BUILD", content, executable = False)
 
 template_helper = struct(
     generate_build = _generate_build,

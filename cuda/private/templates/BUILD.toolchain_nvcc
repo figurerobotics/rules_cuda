@@ -8,7 +8,7 @@ load(
 )
 
 cuda_toolkit_info(
-    name = "cuda-toolkit",
+    name = "cuda-toolkit-%{arch}",
     bin2c = "%{bin2c_label}",
     fatbinary = "%{fatbinary_label}",
     link_stub = "%{link_stub_label}",
@@ -20,8 +20,8 @@ cuda_toolkit_info(
 )
 
 cuda_toolchain_config(
-    name = "nvcc-local-config",
-    cuda_toolkit = ":cuda-toolkit",
+    name = "nvcc-local-config-%{arch}",
+    cuda_toolkit = ":cuda-toolkit-%{arch}",
     # int("%{foo}") instead of %{foo} to make the file valid syntactically.
     nvcc_version_major = int("%{nvcc_version_major}"),
     nvcc_version_minor = int("%{nvcc_version_minor}"),
@@ -29,25 +29,27 @@ cuda_toolchain_config(
 )
 
 cuda_toolchain(
-    name = "nvcc-local",
+    name = "nvcc-local-%{arch}",
     # %{compiler_files_line}
     compiler_label = "%{nvcc_label}",
-    toolchain_config = ":nvcc-local-config",
+    toolchain_config = ":nvcc-local-config-%{arch}",
 )
 
 toolchain(
-    name = "nvcc-local-toolchain",
+    name = "nvcc-local-toolchain-%{arch}",
     exec_compatible_with = [
         "@platforms//os:linux",
+        "@platforms//cpu:%{arch}",
     ],
     target_compatible_with = [
         "@platforms//os:linux",
+       "@platforms//cpu:%{arch}",
     ],
     target_settings = [
         "@rules_cuda//cuda:is_enabled",
         "@rules_cuda//cuda:compiler_is_nvcc",
     ],
-    toolchain = ":nvcc-local",
+    toolchain = ":nvcc-local-%{arch}",
     toolchain_type = "@rules_cuda//cuda:toolchain_type",
     visibility = ["//visibility:public"],
 )

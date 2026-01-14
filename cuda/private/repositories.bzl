@@ -88,58 +88,71 @@ def _detect_local_cuda_toolkit(repository_ctx):
         libdevice_label = None,  # local CTK do not need this
     )
 
-def _detect_deliverable_cuda_toolkit(repository_ctx):
-    cuda_version_str = repository_ctx.attr.version
-    if cuda_version_str == None or cuda_version_str == "":
-        fail("attr version is required.")
+def _detect_deliverable_cuda_toolkits(repository_ctx):
+    toolkits = []
 
-    nvcc_version_str = repository_ctx.attr.nvcc_version
-    if nvcc_version_str == None or nvcc_version_str == "":
-        nvcc_version_str = cuda_version_str
+    def get_repo_for_component(component_name, arch):
+        if component_name not in repository_ctx.attr.components_mapping:
+            fail('component "{}" is required.'.format(component_name))
+        for repo in repository_ctx.attr.components_mapping[component_name]:
+            if arch in repo:
+                return repo
 
-    cuda_version_major, cuda_version_minor = cuda_version_str.split(".")[:2]
-    nvcc_version_major, nvcc_version_minor = nvcc_version_str.split(".")[:2]
+    for arch in repository_ctx.attr.archs:
+        cuda_version_str = repository_ctx.attr.version
+        if cuda_version_str == None or cuda_version_str == "":
+            fail("attr version is required.")
 
-    # NOTE: component nvcc contains some headers that will be used.
-    required_components = ["cccl", "cudart", "nvcc"]
-    if int(cuda_version_major) >= 13:
-        required_components.extend(["crt", "nvvm"])
-    for rc in required_components:
-        if rc not in repository_ctx.attr.components_mapping:
-            fail('component "{}" is required.'.format(rc))
+        nvcc_version_str = repository_ctx.attr.nvcc_version
+        if nvcc_version_str == None or nvcc_version_str == "":
+            nvcc_version_str = cuda_version_str
 
-    nvcc_repo = repository_ctx.attr.components_mapping["nvcc"]
+        cuda_version_major, cuda_version_minor = cuda_version_str.split(".")[:2]
+        nvcc_version_major, nvcc_version_minor = nvcc_version_str.split(".")[:2]
 
-    bin_ext = ".exe" if _is_windows(repository_ctx) else ""
-    nvcc = "{}//:nvcc/bin/nvcc{}".format(nvcc_repo, bin_ext)
-    nvlink = "{}//:nvcc/bin/nvlink{}".format(nvcc_repo, bin_ext)
-    link_stub = "{}//:nvcc/bin/crt/link.stub".format(nvcc_repo)
-    bin2c = "{}//:nvcc/bin/bin2c{}".format(nvcc_repo, bin_ext)
-    fatbinary = "{}//:nvcc/bin/fatbinary{}".format(nvcc_repo, bin_ext)
+        # NOTE: component nvcc contains some headers that will be used.
+        required_components = ["cccl", "cudart", "nvcc"]
+        if int(cuda_version_major) >= 13:
+            required_components.extend(["crt", "nvvm"])
+        for rc in required_components:
+            if rc not in repository_ctx.attr.components_mapping:
+                fail('component "{}" is required.'.format(rc))
 
-    cicc = None
-    libdevice = None
-    if int(cuda_version_major) >= 13:
-        nvvm_repo = repository_ctx.attr.components_mapping["nvvm"]
-        cicc = "{}//:nvvm/nvvm/bin/cicc{}".format(nvvm_repo, bin_ext)  # TODO: can we use @cuda//:cicc?
-        libdevice = "{}//:nvvm/nvvm/libdevice/libdevice.10.bc".format(nvvm_repo)  # TODO: can we use @cuda//:libdevice?
+        nvcc_repo = get_repo_for_component("nvcc", arch)
 
-    return struct(
-        path = None,  # scattered components
-        version_major = cuda_version_major,
-        version_minor = cuda_version_minor,
-        nvcc_version_major = nvcc_version_major,
-        nvcc_version_minor = nvcc_version_minor,
-        nvcc_label = nvcc,
-        nvlink_label = nvlink,
-        link_stub_label = link_stub,
-        bin2c_label = bin2c,
-        fatbinary_label = fatbinary,
-        cicc_label = cicc,
-        libdevice_label = libdevice,
-    )
+        bin_ext = ".exe" if _is_windows(repository_ctx) else ""
+        nvcc = "{}//:nvcc/bin/nvcc{}".format(nvcc_repo, bin_ext)
+        nvlink = "{}//:nvcc/bin/nvlink{}".format(nvcc_repo, bin_ext)
+        link_stub = "{}//:nvcc/bin/crt/link.stub".format(nvcc_repo)
+        bin2c = "{}//:nvcc/bin/bin2c{}".format(nvcc_repo, bin_ext)
+        fatbinary = "{}//:nvcc/bin/fatbinary{}".format(nvcc_repo, bin_ext)
 
-def detect_cuda_toolkit(repository_ctx):
+        cicc = None
+        libdevice = None
+        if int(cuda_version_major) >= 13:
+            nvvm_repo = get_repo_for_component("nvvm", arch)
+            cicc = "{}//:nvvm/nvvm/bin/cicc{}".format(nvvm_repo, bin_ext)  # TODO: can we use @cuda//:cicc?
+            libdevice = "{}//:nvvm/nvvm/libdevice/libdevice.10.bc".format(nvvm_repo)  # TODO: can we use @cuda//:libdevice?
+
+        toolkits.append(struct(
+            path = None,  # scattered components
+            version_major = cuda_version_major,
+            version_minor = cuda_version_minor,
+            nvcc_version_major = nvcc_version_major,
+            nvcc_version_minor = nvcc_version_minor,
+            nvcc_label = nvcc,
+            nvlink_label = nvlink,
+            link_stub_label = link_stub,
+            bin2c_label = bin2c,
+            fatbinary_label = fatbinary,
+            cicc_label = cicc,
+            libdevice_label = libdevice,
+            arch = arch,
+        ))
+
+    return toolkits
+
+def detect_cuda_toolkits(repository_ctx):
     """Detect CUDA Toolkit.
 
     The path to CUDA Toolkit is determined as:
@@ -156,11 +169,11 @@ def detect_cuda_toolkit(repository_ctx):
         A struct contains the information of CUDA Toolkit.
     """
     if repository_ctx.attr.components_mapping != {}:
-        return _detect_deliverable_cuda_toolkit(repository_ctx)
+        return _detect_deliverable_cuda_toolkits(repository_ctx)
     else:
-        return _detect_local_cuda_toolkit(repository_ctx)
+        return [_detect_local_cuda_toolkit(repository_ctx)]
 
-def config_cuda_toolkit_and_nvcc(repository_ctx, cuda):
+def config_cuda_toolkit_and_nvcc(repository_ctx, cudas):
     """Generate `@cuda//BUILD` and `@cuda//defs.bzl` and `@cuda//toolchain/BUILD`
 
     Args:
@@ -176,21 +189,32 @@ def config_cuda_toolkit_and_nvcc(repository_ctx, cuda):
     if len(repository_ctx.attr.components_mapping) != 0:
         is_local_ctk = False
 
-    if is_local_ctk == None and cuda.path != None:
-        # When using a special cuda toolkit path install, need to manually fix up the lib64 links
-        if cuda.path == "/usr/lib/nvidia-cuda-toolkit":
-            repository_ctx.symlink(cuda.path + "/bin", "cuda/bin")
-            repository_ctx.symlink("/usr/lib/x86_64-linux-gnu", "cuda/lib64")
-        else:
-            repository_ctx.symlink(cuda.path, "cuda")
-        is_local_ctk = True
+    version_major = cudas[0].version_major
+    version_minor = cudas[0].version_minor
+
+    for cuda in cudas:
+        if cuda.version_major != version_major or cuda.version_minor != version_minor:
+            fail("All cuda toolkits must have the same major and minor version.")
+
+        if cuda.path != None:
+            is_local_ctk = True
+
+        if is_local_ctk == None and cuda.path != None:
+            # When using a special cuda toolkit path install, need to manually fix up the lib64 links
+            if cuda.path == "/usr/lib/nvidia-cuda-toolkit":
+                repository_ctx.symlink(cuda.path + "/bin", "cuda/bin")
+                if _is_linux(repository_ctx):
+                    repository_ctx.symlink("/usr/lib/{arch}-linux-gnu".format(cuda.arch), "cuda/lib64")
+            else:
+                repository_ctx.symlink(cuda.path, "cuda")
+            is_local_ctk = True
 
     # Generate @cuda//BUILD
     if is_local_ctk == None:
         repository_ctx.symlink(Label("//cuda/private:templates/BUILD.cuda_disabled"), "BUILD")
     elif is_local_ctk:
         libpath = "lib64" if _is_linux(repository_ctx) else "lib"
-        template_helper.generate_build(repository_ctx, libpath)
+        template_helper.generate_build(repository_ctx, libpath, archs = repository_ctx.attr.archs)
     else:
         template_helper.generate_build(
             repository_ctx,
@@ -198,13 +222,14 @@ def config_cuda_toolkit_and_nvcc(repository_ctx, cuda):
             components = repository_ctx.attr.components_mapping,
             is_cuda_repo = True,
             is_deliverable = True,
+            archs = repository_ctx.attr.archs,
         )
 
     # Generate @cuda//defs.bzl
-    template_helper.generate_defs_bzl(repository_ctx, cuda.version_major, cuda.version_minor, is_local_ctk == True)
+    template_helper.generate_defs_bzl(repository_ctx, version_major, version_minor, is_local_ctk == True, repository_ctx.attr.archs)
 
     # Generate @cuda//toolchain/BUILD
-    template_helper.generate_toolchain_build(repository_ctx, cuda)
+    template_helper.generate_toolchain_build(repository_ctx, cudas, repository_ctx.attr.archs)
 
 def detect_clang(repository_ctx):
     """Detect local clang installation.
@@ -249,7 +274,7 @@ def detect_clang(repository_ctx):
 
     return clang_path_or_label
 
-def config_clang(repository_ctx, cuda, clang_path_or_label):
+def config_clang(repository_ctx, cudas, clang_path_or_label):
     """Generate `@cuda//toolchain/clang/BUILD`
 
     Args:
@@ -263,17 +288,19 @@ def config_clang(repository_ctx, cuda, clang_path_or_label):
         is_local_ctk = False
 
     # Generate @cuda//toolchain/clang/BUILD
-    template_helper.generate_toolchain_clang_build(repository_ctx, cuda, clang_path_or_label)
+    template_helper.generate_toolchain_clang_build(repository_ctx, cudas, clang_path_or_label, archs = repository_ctx.attr.archs)
 
 def config_disabled(repository_ctx):
     repository_ctx.symlink(Label("//cuda/private:templates/BUILD.toolchain_disabled"), "toolchain/disabled/BUILD")
 
 def _cuda_toolkit_impl(repository_ctx):
-    cuda = detect_cuda_toolkit(repository_ctx)
-    config_cuda_toolkit_and_nvcc(repository_ctx, cuda)
+    archs = repository_ctx.attr.archs
+
+    cudas = detect_cuda_toolkits(repository_ctx)
+    config_cuda_toolkit_and_nvcc(repository_ctx, cudas)
 
     clang_path_or_label = detect_clang(repository_ctx)
-    config_clang(repository_ctx, cuda, clang_path_or_label)
+    config_clang(repository_ctx, cudas, clang_path_or_label)
 
     config_disabled(repository_ctx)
 
@@ -281,13 +308,17 @@ cuda_toolkit = repository_rule(
     implementation = _cuda_toolkit_impl,
     attrs = {
         "toolkit_path": attr.string(doc = "Path to the CUDA SDK, if empty the environment variable CUDA_PATH will be used to deduce this path."),
-        "components_mapping": attr.string_dict(
+        "components_mapping": attr.string_list_dict(
             doc = "A mapping from component names to component repos of a deliverable CUDA Toolkit. " +
                   "Only the repo part of the label is useful",
         ),
         "version": attr.string(doc = "cuda toolkit version. Required for deliverable toolkit only."),
         "nvcc_version": attr.string(
             doc = "nvcc version. Required for deliverable toolkit only. Fallback to version if omitted.",
+        ),
+        "archs": attr.string_list(
+            mandatory = True,
+            doc = "Architectures of the CUDA Toolkit.",
         ),
     },
     configure = True,
@@ -370,6 +401,8 @@ def _cuda_component_impl(repository_ctx):
         components = {component_name: repository_ctx.name},
         is_cuda_repo = False,
         is_deliverable = True,
+        # we generate a fragment for each arch individually
+        archs = [repository_ctx.attr.arch],
     )
 
     desc_name = repository_ctx.attr.descriptive_name or repository_ctx.attr.component_name
@@ -428,6 +461,7 @@ cuda_component = repository_rule(
                   "If all downloads fail, the rule will fail.",
         ),
         "version": attr.string(doc = "A unique version number for component. Store in version.json file"),
+        "arch": attr.string(mandatory = True, doc = "Architecture x86_64 or aarch64."),
     },
 )
 

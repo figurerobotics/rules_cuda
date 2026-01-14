@@ -15,13 +15,11 @@ cuda.toolkit(
 use_repo(cuda, "cuda")
 
 register_toolchains(
-    "@cuda//toolchain:nvcc-local-toolchain",
-    "@cuda//toolchain/clang:clang-local-toolchain",
     "@cuda//toolchain/disabled:disabled-local-toolchain",
 )
 
-bazel_dep(name = "rules_cuda_examples", dev_dependency = True)
-local_path_override(
-    module_name = "rules_cuda_examples",
-    path = "./examples",
-)
+# bazel_dep(name = "rules_cuda_examples", dev_dependency = True)
+# local_path_override(
+#     module_name = "rules_cuda_examples",
+#     path = "./examples",
+# )

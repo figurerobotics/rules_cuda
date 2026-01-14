@@ -8,7 +8,7 @@ load(
 )
 
 cuda_toolkit_info(
-    name = "cuda-toolkit",
+    name = "cuda-toolkit-%{arch}",
     bin2c = "%{bin2c_label}",
     fatbinary = "%{fatbinary_label}",
     link_stub = "%{link_stub_label}",
@@ -21,25 +21,33 @@ cuda_toolkit_info(
 )
 
 cuda_toolchain_config(
-    name = "clang-local-config",
-    cuda_toolkit = ":cuda-toolkit",
+    name = "clang-local-config-%{arch}",
+    cuda_toolkit = ":cuda-toolkit-%{arch}",
     toolchain_identifier = "clang",
 )
 
 cuda_toolchain(
-    name = "clang-local",
+    name = "clang-local-%{arch}",
     # %{compiler_attribute_line}
     # %{compiler_files_line}
-    toolchain_config = ":clang-local-config",
+    toolchain_config = ":clang-local-config-%{arch}",
 )
 
 toolchain(
-    name = "clang-local-toolchain",
+    name = "clang-local-toolchain-%{arch}",
+    exec_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:%{arch}",
+    ],
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:%{arch}",
+    ],
     target_settings = [
         "@rules_cuda//cuda:is_enabled",
         "@rules_cuda//cuda:compiler_is_clang",
     ],
-    toolchain = ":clang-local",
+    toolchain = ":clang-local-%{arch}",
     toolchain_type = "@rules_cuda//cuda:toolchain_type",
     visibility = ["//visibility:public"],
 )

@@ -57,6 +57,7 @@ cuda_redist_json_tag = tag_class(attrs = {
         doc = "Generate a URL by using the specified version." +
               "This URL will be tried after all URLs specified in the `urls` attribute.",
     ),
+    "archs": attr.string_list(mandatory = True, doc = "Architectures, eg: x86_64, aarch64."),
 })
 
 cuda_toolkit_tag = tag_class(attrs = {
@@ -85,7 +86,7 @@ def _find_modules(module_ctx):
     if root == None:
         root = our_module
     if our_module == None:
-        fail("Unable to find rules_cuda module")
+        print("Unable to find rules_cuda module - we commented it out")
 
     return root, our_module
 
@@ -100,38 +101,45 @@ def _redist_json_impl(module_ctx, attr):
     mapping = {}
     for spec in component_specs:
         repo_name = redist_json_helper.get_repo_name(module_ctx, spec)
-        mapping[spec["component_name"]] = "@" + repo_name
-
+        comp = spec["component_name"]
+        if comp not in mapping:
+            mapping[comp] = []
+        mapping[comp].append("@" + repo_name)
         attr = {key: value for key, value in spec.items()}
         attr["name"] = repo_name
+        attr["arch"] = spec["arch"]
         cuda_component(**attr)
     return redist_ver, mapping
 
 def _impl(module_ctx):
     # Toolchain configuration is only allowed in the root module, or in rules_cuda.
     root, rules_cuda = _find_modules(module_ctx)
-    components = None
-    redist_jsons = None
-    toolkits = None
-    if root.tags.toolkit:
-        components = root.tags.component
-        redist_jsons = root.tags.redist_json
-        toolkits = root.tags.toolkit
-    else:
-        components = rules_cuda.tags.component
-        redist_jsons = rules_cuda.tags.redist_json
-        toolkits = rules_cuda.tags.toolkit
+    components = []
+    redist_jsons = []
+    toolkits = []
+
+    # if root.tags.toolkit:
+    #     components = root.tags.component
+    redist_jsons = root.tags.redist_json
+    toolkits = root.tags.toolkit
+    # else:
+    #     components = rules_cuda.tags.component
+    #     redist_jsons = rules_cuda.tags.redist_json
+    #     toolkits = rules_cuda.tags.toolkit
 
     for component in components:
         cuda_component(**_module_tag_to_dict(component))
 
-    if len(redist_jsons) > 1:
-        fail("Using multiple cuda.redist_json is not supported yet.")
+    # if len(redist_jsons) > 1:
+    #     fail("Using multiple cuda.redist_json is not supported yet.")
 
     redist_version = None
     components_mapping = None
+
     for redist_json in redist_jsons:
         redist_version, components_mapping = _redist_json_impl(module_ctx, redist_json)
+        # print("Defining cuda_toolkit {} with components_mapping {}".format(redist_json.name, json.encode_indent(components_mapping)))
+        cuda_toolkit(name = redist_json.name, components_mapping = components_mapping, version = redist_version, archs = redist_json.archs)
 
     registrations = {}
     for toolkit in toolkits:
@@ -143,14 +151,15 @@ def _impl(module_ctx):
         else:
             registrations[toolkit.name] = toolkit
 
-    if len(registrations) > 1:
-        fail("multiple cuda.toolkit is not supported")
+    # if len(registrations) > 1:
+    # fail("multiple cuda.toolkit is not supported")
 
-    for _, toolkit in registrations.items():
-        if components_mapping != None:
-            cuda_toolkit(name = toolkit.name, components_mapping = components_mapping, version = redist_version)
-        else:
-            cuda_toolkit(**_module_tag_to_dict(toolkit))
+    # for _, toolkit in registrations.items():
+    # if components_mapping != None:
+    #     cuda_toolkit(name = toolkit.name, components_mapping = components_mapping, version = redist_version)
+    # else:
+    #     cuda_toolkit(**_module_tag_to_dict(toolkit))
+    # cuda_toolkit(**_module_tag_to_dict(toolkit))
 
 toolchain = module_extension(
     implementation = _impl,
