@@ -6,6 +6,14 @@ def _first(list):
         return None
     return list[0]
 
+# CUDA redist arch names don't always match @platforms//cpu constraint names.
+_ARCH_TO_PLATFORM_CPU = {
+    "sbsa": "aarch64",
+}
+
+def _platform_cpu(arch):
+    return _ARCH_TO_PLATFORM_CPU.get(arch, arch)
+
 def _to_forward_slash(s):
     return s.replace("\\", "/")
 
@@ -100,7 +108,7 @@ def _generate_build_impl(repository_ctx, libpath, components, is_cuda_repo, is_d
                         repo = _first([r for r in repolist if arch in r])
                         if repo == None:
                             fail("No repo found for component {} and arch {}".format(comp, arch))
-                        select_lines += '"@platforms//cpu:{arch}": "{repo}//:{target}",\n'.format(arch = arch, target = target, repo = repo)
+                        select_lines += '"@platforms//cpu:{cpu}": "{repo}//:{target}",\n'.format(cpu = _platform_cpu(arch), target = target, repo = repo)
                     select_lines += "}),\n"
                     line = 'alias(name = "{target}", actual = {select_lines})'.format(select_lines = select_lines, target = target, repo = repo)
                 template_content.append(line)
@@ -148,7 +156,7 @@ def _generate_build(repository_ctx, libpath, components = None, is_cuda_repo = T
 
 def _generate_defs_bzl(repository_ctx, version_major, version_minor, is_local_ctk, archs = ["x86_64"]):
     tpl_label = Label("//cuda/private:templates/defs.bzl.tpl")
-    substitutions = {        
+    substitutions = {
         "%{version_major}": str(version_major),
         "%{version_minor}": str(version_minor),
         "%{is_local_ctk}": str(is_local_ctk),
@@ -235,6 +243,7 @@ def _generate_toolchain_build(repository_ctx, cudas, archs = ["x86_64"]):
             "%{link_stub_label}": cuda.link_stub_label,
             "%{bin2c_label}": cuda.bin2c_label,
             "%{fatbinary_label}": cuda.fatbinary_label,
+            "%{platform_cpu}": _platform_cpu(cuda.arch),
             "%{arch}": cuda.arch,
         }
         if cuda.cicc_label:
@@ -314,6 +323,7 @@ def _generate_toolchain_clang_build(repository_ctx, cudas, clang_path_or_label, 
             "%{link_stub_label}": cuda.link_stub_label,
             "%{bin2c_label}": cuda.bin2c_label,
             "%{fatbinary_label}": cuda.fatbinary_label,
+            "%{platform_cpu}": _platform_cpu(arch),
             "%{arch}": arch,
         }
         if cuda.cicc_label:

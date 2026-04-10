@@ -37,11 +37,11 @@ toolchain(
     name = "clang-local-toolchain-%{arch}",
     exec_compatible_with = [
         "@platforms//os:linux",
-        "@platforms//cpu:%{arch}",
+        "@platforms//cpu:%{platform_cpu}",
     ],
     target_compatible_with = [
         "@platforms//os:linux",
-        "@platforms//cpu:%{arch}",
+        "@platforms//cpu:%{platform_cpu}",
     ],
     target_settings = [
         "@rules_cuda//cuda:is_enabled",
