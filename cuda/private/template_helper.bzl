@@ -148,7 +148,7 @@ def _generate_build(repository_ctx, libpath, components = None, is_cuda_repo = T
 
 def _generate_defs_bzl(repository_ctx, version_major, version_minor, is_local_ctk, archs = ["x86_64"]):
     tpl_label = Label("//cuda/private:templates/defs.bzl.tpl")
-    substitutions = {        
+    substitutions = {
         "%{version_major}": str(version_major),
         "%{version_minor}": str(version_minor),
         "%{is_local_ctk}": str(is_local_ctk),

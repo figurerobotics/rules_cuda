@@ -78,7 +78,8 @@ def _collect_specs(ctx, attr, redist, the_url):
         os = "windows"
 
     for arch in attr.archs:
-        platform = "{os}-{arch}".format(os = os, arch = arch)
+        pkg_arch = "sbsa" if arch == "aarch64" else arch
+        platform = "{os}-{arch}".format(os = os, arch = pkg_arch)
         all_components_on_platform = [k for k, v in FULL_COMPONENT_NAME.items() if v in redist and platform in redist[v]]
         components = attr.components if attr.components else all_components_on_platform
 
