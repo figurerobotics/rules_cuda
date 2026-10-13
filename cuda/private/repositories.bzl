@@ -430,6 +430,11 @@ def _cuda_component_impl(repository_ctx):
             ),
         )
 
+    # The archive is pinned by checksum and everything else is generated from
+    # attrs and templates, so the result never depends on the workspace or host:
+    # let Bazel share one copy across output bases via the repo contents cache.
+    return repository_ctx.repo_metadata(reproducible = True)
+
 cuda_component = repository_rule(
     implementation = _cuda_component_impl,
     attrs = {
